@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Minimal Rust crate for fetching custom instance metadata from AWS, GCP, and Azure VMs"
 repository = "https://github.com/haraldh/cloud-metadata"
+documentation = "https://docs.rs/cloud-metadata"
 keywords = ["cloud", "metadata", "aws", "gcp", "azure"]
 categories = ["api-bindings"]
 
