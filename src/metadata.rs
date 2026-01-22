@@ -31,6 +31,7 @@ use crate::providers::{aws, azure, gcp};
 pub struct CloudMetadata {
     provider: CloudProvider,
     client: MetadataClient,
+    max_size: Option<usize>,
 }
 
 impl CloudMetadata {
@@ -55,13 +56,25 @@ impl CloudMetadata {
         // Run all probes concurrently and return the first successful one
         tokio::select! {
             Ok(()) = gcp::probe(&client) => {
-                return Ok(Self::gcp_with_base_url(base_url));
+                return Ok(Self {
+                    provider: CloudProvider::Gcp,
+                    client: MetadataClient::with_base_url(base_url)?,
+                    max_size: None,
+                });
             }
             Ok(()) = aws::probe(&client) => {
-                return Ok(Self::aws_with_base_url(base_url));
+                return Ok(Self {
+                    provider: CloudProvider::Aws,
+                    client: MetadataClient::with_base_url(base_url)?,
+                    max_size: None,
+                });
             }
             Ok(()) = azure::probe(&client) => {
-                return Ok(Self::azure_with_base_url(base_url));
+                return Ok(Self {
+                    provider: CloudProvider::Azure,
+                    client: MetadataClient::with_base_url(base_url)?,
+                    max_size: None,
+                });
             }
             else => {}
         }
@@ -74,6 +87,7 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Aws,
             client: MetadataClient::default(),
+            max_size: None,
         }
     }
 
@@ -82,6 +96,7 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Aws,
             client: MetadataClient::with_base_url(base_url).expect("failed to create HTTP client"),
+            max_size: None,
         }
     }
 
@@ -90,6 +105,7 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Gcp,
             client: MetadataClient::default(),
+            max_size: None,
         }
     }
 
@@ -98,6 +114,7 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Gcp,
             client: MetadataClient::with_base_url(base_url).expect("failed to create HTTP client"),
+            max_size: None,
         }
     }
 
@@ -106,6 +123,7 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Azure,
             client: MetadataClient::default(),
+            max_size: None,
         }
     }
 
@@ -114,7 +132,16 @@ impl CloudMetadata {
         Self {
             provider: CloudProvider::Azure,
             client: MetadataClient::with_base_url(base_url).expect("failed to create HTTP client"),
+            max_size: None,
         }
+    }
+
+    /// Set the maximum size limit for fetched data.
+    ///
+    /// If the fetched data exceeds this limit, `MetadataError::TooLarge` is returned.
+    pub fn with_max_size(mut self, max_size: usize) -> Self {
+        self.max_size = Some(max_size);
+        self
     }
 
     /// Get the detected cloud provider.
@@ -131,11 +158,14 @@ impl CloudMetadata {
     /// # Errors
     ///
     /// Returns an error if the metadata cannot be fetched or decoded.
+    /// Returns `MetadataError::TooLarge` if the data exceeds the configured `max_size`.
     pub async fn custom_data(&self, key: &str) -> Result<Vec<u8>, MetadataError> {
         match self.provider {
-            CloudProvider::Aws => aws::fetch_user_data(&self.client).await,
-            CloudProvider::Gcp => gcp::fetch_instance_attribute(&self.client, key).await,
-            CloudProvider::Azure => azure::fetch_custom_data(&self.client).await,
+            CloudProvider::Aws => aws::fetch_user_data(&self.client, self.max_size).await,
+            CloudProvider::Gcp => {
+                gcp::fetch_instance_attribute(&self.client, key, self.max_size).await
+            }
+            CloudProvider::Azure => azure::fetch_custom_data(&self.client, self.max_size).await,
         }
     }
 

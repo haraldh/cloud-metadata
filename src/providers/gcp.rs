@@ -1,6 +1,6 @@
 //! GCP metadata implementation.
 
-use crate::client::MetadataClient;
+use crate::client::{read_body_limited, MetadataClient};
 use crate::error::MetadataError;
 
 /// GCP metadata service base path.
@@ -40,6 +40,7 @@ pub async fn probe(client: &MetadataClient) -> Result<(), MetadataError> {
 pub async fn fetch_instance_attribute(
     client: &MetadataClient,
     key: &str,
+    max_size: Option<usize>,
 ) -> Result<Vec<u8>, MetadataError> {
     let url = format!("{}{}/{}", client.base_url(), INSTANCE_ATTRIBUTES_PATH, key);
 
@@ -58,7 +59,7 @@ pub async fn fetch_instance_attribute(
         return Err(MetadataError::Http(status.as_u16()));
     }
 
-    Ok(response.bytes().await?.to_vec())
+    read_body_limited(response, max_size).await
 }
 
 /// Fetch a project attribute by key.
