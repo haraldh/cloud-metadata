@@ -3,7 +3,7 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
-use crate::client::MetadataClient;
+use crate::client::{read_body_limited, MetadataClient};
 use crate::error::MetadataError;
 
 /// Azure metadata service base path.
@@ -46,7 +46,11 @@ pub async fn probe(client: &MetadataClient) -> Result<(), MetadataError> {
 
 /// Fetch customData from Azure metadata service.
 /// Azure returns base64-encoded data, which is automatically decoded.
-pub async fn fetch_custom_data(client: &MetadataClient) -> Result<Vec<u8>, MetadataError> {
+/// The max_size limit applies to the decoded data size.
+pub async fn fetch_custom_data(
+    client: &MetadataClient,
+    max_size: Option<usize>,
+) -> Result<Vec<u8>, MetadataError> {
     let url = format!("{}{}", client.base_url(), CUSTOM_DATA_PATH);
 
     let response = client
@@ -65,14 +69,32 @@ pub async fn fetch_custom_data(client: &MetadataClient) -> Result<Vec<u8>, Metad
         return Err(MetadataError::Http(status.as_u16()));
     }
 
-    let b64 = response.text().await?;
+    // Calculate max encoded size: base64 encoding expands data by ~4/3
+    // So for a decoded max_size of N, encoded max is approximately N * 4/3 + 4 (padding)
+    // We add some margin for safety
+    let max_encoded_size = max_size.map(|max| max.saturating_mul(4) / 3 + 4);
+
+    // Read body with streaming protection against huge payloads
+    let b64_bytes = read_body_limited(response, max_encoded_size).await?;
 
     // Handle empty response
-    if b64.is_empty() {
+    if b64_bytes.is_empty() {
         return Err(MetadataError::NotFound);
     }
 
-    STANDARD.decode(&b64).map_err(|_| MetadataError::Base64)
+    // Convert to string for base64 decoding
+    let b64 = String::from_utf8(b64_bytes).map_err(|_| MetadataError::Utf8)?;
+
+    let decoded = STANDARD.decode(&b64).map_err(|_| MetadataError::Base64)?;
+
+    // Check size limit after decoding (the actual constraint)
+    if let Some(max) = max_size {
+        if decoded.len() > max {
+            return Err(MetadataError::TooLarge(decoded.len(), max));
+        }
+    }
+
+    Ok(decoded)
 }
 
 #[cfg(test)]

@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{Client, Response};
+
+use crate::error::MetadataError;
 
 /// Default timeout for metadata requests.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,6 +59,54 @@ impl MetadataClient {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+}
+
+/// Read response body with an optional size limit.
+///
+/// If `max_size` is `Some`, this will:
+/// 1. Check the `Content-Length` header and fail early if it exceeds the limit
+/// 2. Read the body with a pre-allocated capped buffer, aborting immediately if exceeded
+///
+/// This protects against memory exhaustion from large responses.
+pub async fn read_body_limited(
+    response: Response,
+    max_size: Option<usize>,
+) -> Result<Vec<u8>, MetadataError> {
+    let Some(max_size) = max_size else {
+        // No limit, just read all bytes
+        return Ok(response.bytes().await?.to_vec());
+    };
+
+    // Check Content-Length header first for early rejection (avoids reading any body)
+    if let Some(content_length) = response.content_length() {
+        if content_length as usize > max_size {
+            return Err(MetadataError::TooLarge(content_length as usize, max_size));
+        }
+    }
+
+    // Pre-allocate buffer with capacity capped at max_size
+    // This prevents allocation of huge buffers even if Content-Length is missing/wrong
+    let capacity = response
+        .content_length()
+        .map(|cl| (cl as usize).min(max_size))
+        .unwrap_or(max_size.min(8192));
+    let mut body = Vec::with_capacity(capacity);
+    let mut total_read = 0usize;
+
+    let mut stream = response;
+    while let Some(chunk) = stream.chunk().await? {
+        // Check BEFORE copying to avoid allocating for data we'll reject
+        if total_read.saturating_add(chunk.len()) > max_size {
+            return Err(MetadataError::TooLarge(
+                total_read.saturating_add(chunk.len()),
+                max_size,
+            ));
+        }
+        total_read += chunk.len();
+        body.extend_from_slice(&chunk);
+    }
+
+    Ok(body)
 }
 
 impl Default for MetadataClient {

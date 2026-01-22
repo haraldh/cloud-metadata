@@ -44,6 +44,10 @@ pub enum MetadataError {
     /// Operation not supported for this provider.
     #[error("operation not supported for this provider")]
     NotSupported,
+
+    /// Response exceeds maximum allowed size.
+    #[error("response too large: {0} bytes exceeds limit of {1} bytes")]
+    TooLarge(usize, usize),
 }
 
 #[cfg(test)]

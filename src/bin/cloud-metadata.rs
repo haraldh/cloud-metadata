@@ -40,6 +40,10 @@ enum Commands {
         /// Output format
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
+
+        /// Maximum size in bytes to accept (fails if exceeded)
+        #[arg(short, long)]
+        max_size: Option<usize>,
     },
 }
 
@@ -101,12 +105,18 @@ async fn run(cli: Cli) -> Result<(), MetadataError> {
             key,
             provider,
             format,
+            max_size,
         } => {
             let metadata = match provider {
                 Some(CloudProvider::Aws) => CloudMetadata::aws(),
                 Some(CloudProvider::Gcp) => CloudMetadata::gcp(),
                 Some(CloudProvider::Azure) => CloudMetadata::azure(),
                 None => CloudMetadata::detect().await?,
+            };
+
+            let metadata = match max_size {
+                Some(size) => metadata.with_max_size(size),
+                None => metadata,
             };
 
             match format {

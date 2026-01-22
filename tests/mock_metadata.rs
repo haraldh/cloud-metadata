@@ -432,3 +432,80 @@ mod cross_provider {
         assert!(matches!(result, Err(MetadataError::NotSupported)));
     }
 }
+
+// =============================================================================
+// Max Size Tests
+// =============================================================================
+
+mod max_size {
+    use super::*;
+
+    async fn setup_gcp_mock(server: &MockServer, key: &str, value: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/computeMetadata/v1/instance/attributes/{}",
+                key
+            )))
+            .and(header("Metadata-Flavor", "Google"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(value))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_max_size_allows_smaller_data() {
+        let server = MockServer::start().await;
+        let data = "small data";
+        setup_gcp_mock(&server, "config", data).await;
+
+        let metadata = CloudMetadata::gcp_with_base_url(&server.uri()).with_max_size(100);
+        let result = metadata.custom_data("config").await.unwrap();
+
+        assert_eq!(String::from_utf8(result).unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_max_size_allows_exact_size() {
+        let server = MockServer::start().await;
+        let data = "exactly10!";
+        setup_gcp_mock(&server, "config", data).await;
+
+        let metadata = CloudMetadata::gcp_with_base_url(&server.uri()).with_max_size(10);
+        let result = metadata.custom_data("config").await.unwrap();
+
+        assert_eq!(String::from_utf8(result).unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_max_size_rejects_larger_data() {
+        let server = MockServer::start().await;
+        let data = "this data is too large for the limit";
+        setup_gcp_mock(&server, "config", data).await;
+
+        let metadata = CloudMetadata::gcp_with_base_url(&server.uri()).with_max_size(10);
+        let result = metadata.custom_data("config").await;
+
+        assert!(matches!(result, Err(MetadataError::TooLarge(36, 10))));
+    }
+
+    #[tokio::test]
+    async fn test_max_size_error_message() {
+        let err = MetadataError::TooLarge(1000, 100);
+        assert_eq!(
+            err.to_string(),
+            "response too large: 1000 bytes exceeds limit of 100 bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_max_size_allows_any_data() {
+        let server = MockServer::start().await;
+        let data = "a".repeat(10000);
+        setup_gcp_mock(&server, "config", &data).await;
+
+        let metadata = CloudMetadata::gcp_with_base_url(&server.uri());
+        let result = metadata.custom_data("config").await.unwrap();
+
+        assert_eq!(result.len(), 10000);
+    }
+}

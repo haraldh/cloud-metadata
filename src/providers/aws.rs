@@ -1,6 +1,6 @@
 //! AWS IMDSv2 metadata implementation.
 
-use crate::client::MetadataClient;
+use crate::client::{read_body_limited, MetadataClient};
 use crate::error::MetadataError;
 
 /// AWS IMDSv2 token endpoint path.
@@ -52,7 +52,10 @@ async fn get_token(client: &MetadataClient) -> Result<String, MetadataError> {
 }
 
 /// Fetch user-data from AWS metadata service.
-pub async fn fetch_user_data(client: &MetadataClient) -> Result<Vec<u8>, MetadataError> {
+pub async fn fetch_user_data(
+    client: &MetadataClient,
+    max_size: Option<usize>,
+) -> Result<Vec<u8>, MetadataError> {
     let token = get_token(client).await?;
     let url = format!("{}{}", client.base_url(), USER_DATA_PATH);
 
@@ -71,7 +74,7 @@ pub async fn fetch_user_data(client: &MetadataClient) -> Result<Vec<u8>, Metadat
         return Err(MetadataError::Http(status.as_u16()));
     }
 
-    Ok(response.bytes().await?.to_vec())
+    read_body_limited(response, max_size).await
 }
 
 #[cfg(test)]
